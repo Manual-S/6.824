@@ -22,12 +22,22 @@ type ExampleReply struct {
 	Y int
 }
 
+type TaskFinishArgs struct {
+	FileID int
+	WorkID int
+}
+
 // TaskReply master和worker通信的reply
 type TaskReply struct {
-	// map部分
 	FileName string
-
-	// reduce部分
+	FileID   int
+	NReduce  int
+	WorkID   int
+	// 任务类型
+	TaskType int
+	mapF     func(string, string) []KeyValue
+	ReduceF  func()
+	Accept   bool
 }
 
 // Add your RPC definitions here.

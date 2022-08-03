@@ -1,6 +1,11 @@
 package mr
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+	"io/ioutil"
+	"os"
+)
 import "log"
 import "net/rpc"
 import "hash/fnv"
@@ -11,6 +16,72 @@ import "hash/fnv"
 type KeyValue struct {
 	Key   string
 	Value string
+}
+
+type Work struct {
+	WorkID int // 当前work的id
+}
+
+func (w *Work) executeMapTask(reply *TaskReply) error {
+	kv := w.getKVByMapF(reply.FileName, reply.mapF)
+	if kv == nil {
+		return errors.New("kv is nil")
+	}
+	err := w.writeKVToFile(reply.WorkID, reply.NReduce, kv)
+	if err != nil {
+		log.Printf("writeKVToFile error err = %v,workID %v", err, reply.WorkID)
+		return err
+	}
+	err := w.notifyTaskFinish(reply.FileID)
+	if err != nil {
+		log.Printf("notifyTaskFinish error %v")
+		return err
+	}
+	return nil
+}
+
+func (w *Work) notifyTaskFinish(fileID int) error {
+	request := TaskFinishArgs{}
+	request.FileID = fileID
+	request.WorkID = w.WorkID
+
+	reply := TaskReply{}
+	call("Master.TaskFinish", request, reply)
+
+	if reply.Accept {
+		log.Printf("task accept work id %v", w.WorkID)
+		return nil
+	}
+	str := fmt.Sprintf("task accept error work id %v", w.WorkID)
+	err := errors.New(str)
+	log.Printf("%v", err)
+
+	return err
+}
+
+// getKVByMapF 从文件中获取kv键值对
+func (w *Work) getKVByMapF(fileName string, mapf func(string, string) []KeyValue) []KeyValue {
+	file, err := os.Open(fileName)
+	if err != nil {
+		log.Fatalf("cannot open %v", file)
+		return nil
+	}
+
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("cannot read %v", file)
+	}
+	defer file.Close()
+
+	kva := mapf(fileName, string(content))
+
+	return kva
+}
+
+// writeKVToFile todo
+func (w *Work) writeKVToFile(workID int, nReduce int, kv []KeyValue) error {
+	// 将kv写入到mr-workID-nReduce的文件中
+	return nil
 }
 
 //
@@ -30,9 +101,14 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	task := GetTask()
+	w := Work{}
 	switch task.TaskType {
 	case MapTaskType:
-
+		err := w.executeMapTask(task)
+		if err != nil {
+			log.Printf("executeMapTask error %v", err)
+			return
+		}
 	case ReduceTaskType:
 
 	default:
@@ -41,10 +117,10 @@ func Worker(mapf func(string, string) []KeyValue,
 }
 
 // GetTask worker向master获取一个任务
-func GetTask() *TaskInfo {
+func GetTask() *TaskReply {
 	args := ExampleArgs{}
-	reply := TaskInfo{}
-	call("Master.GetTask", args, reply)
+	reply := TaskReply{}
+	call("Master.AssignTask", args, reply)
 
 	return &reply
 }

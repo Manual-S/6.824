@@ -13,6 +13,7 @@ type TaskInf interface {
 type TaskInfo struct {
 	TaskType int // Task的类型 1 mapTask 2 ReduceTask
 	WorkID   int
+	FileID   int // 文件ID
 }
 
 // TaskQueue 存放任务的队列

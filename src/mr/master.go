@@ -72,16 +72,23 @@ func (m *Master) AssignTask(request ExampleArgs, reply *TaskReply) error {
 
 	if m.IsMapTaskFinish {
 		// 分配reduce任务
-		err := m.assignMapTask(request, reply)
+		err := m.assignReduceTask(request, reply)
 		if err != nil {
-			log.Printf("assignMapTask error %v", err)
+			log.Printf("assignReduceTask error %v", err)
 			return err
 		}
 		return nil
 	}
 
 	// 分配Map任务
+	err := m.assignMapTask(request, reply)
+	if err != nil {
+		log.Printf("assignMapTask error %v", err)
+		return err
+	}
+
 	return nil
+
 }
 
 // assignMapTask 分发map任务
@@ -94,10 +101,12 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
 	mapTask := <-m.UndistributedMapTasks
 
+	reply.FileName = m.Files[mapTask.FileID]
+	return nil
 }
 
 // assignReduceTask 分发reduce任务
-func (m *Master) assignReduceTask() error {
+func (m *Master) assignReduceTask(request ExampleArgs, reply *TaskReply) error {
 	return nil
 }
 
