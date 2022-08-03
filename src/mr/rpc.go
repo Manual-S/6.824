@@ -22,8 +22,15 @@ type ExampleReply struct {
 	Y int
 }
 
-// Add your RPC definitions here.
+// TaskReply master和worker通信的reply
+type TaskReply struct {
+	// map部分
+	FileName string
 
+	// reduce部分
+}
+
+// Add your RPC definitions here.
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the master.
