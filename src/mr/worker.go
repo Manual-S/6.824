@@ -33,12 +33,13 @@ func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // executeMapTask 处理MapTask
-func (w *Work) executeMapTask(reply *TaskReply) error {
-	kv := w.getKVByMapF(reply.FileName, reply.mapF)
-	if kv == nil {
-		return errors.New("kv is nil")
+func (w *Work) executeMapTask(reply *TaskReply, mapF func(string, string) []KeyValue) error {
+	kv, err := w.getKVByMapF(reply.FileName, mapF)
+	if err != nil {
+		log.Printf("getKVByMapF error %v", err)
+		return err
 	}
-	err := w.writeKVToFile(reply.WorkID, reply.NReduce, kv)
+	err = w.writeKVToFile(reply.WorkID, reply.NReduce, kv)
 	if err != nil {
 		log.Printf("writeKVToFile error err = %v,workID %v", err, reply.WorkID)
 		return err
@@ -71,22 +72,23 @@ func (w *Work) notifyMapTaskFinish(fileID int) error {
 }
 
 // getKVByMapF 从文件中获取kv键值对
-func (w *Work) getKVByMapF(fileName string, mapf func(string, string) []KeyValue) []KeyValue {
+func (w *Work) getKVByMapF(fileName string, mapf func(string, string) []KeyValue) ([]KeyValue, error) {
 	file, err := os.Open(fileName)
 	if err != nil {
 		log.Fatalf("cannot open %v", file)
-		return nil
+		return nil, err
 	}
 
 	content, err := ioutil.ReadAll(file)
 	if err != nil {
 		log.Fatalf("cannot read %v", file)
+		return nil, err
 	}
 	defer file.Close()
 
 	kva := mapf(fileName, string(content))
 
-	return kva
+	return kva, nil
 }
 
 // writeKVToFile todo
@@ -203,13 +205,17 @@ func Worker(mapf func(string, string) []KeyValue,
 	w := Work{}
 	switch task.TaskType {
 	case MapTaskType:
-		err := w.executeMapTask(task)
+		err := w.executeMapTask(task, mapf)
 		if err != nil {
 			log.Printf("executeMapTask error %v", err)
 			return
 		}
 	case ReduceTaskType:
-
+		err := w.executeReduceTask(task)
+		if err != nil {
+			log.Printf("executeReduceTask error %v", err)
+			return
+		}
 	default:
 		panic("Task Type error")
 	}
