@@ -29,15 +29,16 @@ type TaskFinishArgs struct {
 
 // TaskReply master和worker通信的reply
 type TaskReply struct {
-	FileName string
-	FileID   int
-	NReduce  int
-	WorkID   int
-	// 任务类型
-	TaskType int
-	mapF     func(string, string) []KeyValue
-	ReduceF  func()
-	Accept   bool
+	FileName    string
+	FileID      int
+	FileCount   int
+	NReduce     int
+	ReduceIndex int
+	WorkID      int
+	TaskType    int                             // 任务类型
+	mapF        func(string, string) []KeyValue // map函数
+	ReduceF     func(string, []string) string   // reduce函数
+	Accept      bool
 }
 
 // Add your RPC definitions here.
