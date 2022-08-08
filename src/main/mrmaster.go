@@ -11,13 +11,16 @@ package main
 
 import (
 	"../mr"
+	"fmt"
 	"log"
+	"os"
+	"time"
 )
-import "time"
-import "os"
-import "fmt"
 
 func main() {
+
+	log.SetFlags(log.Llongfile | log.Ldate)
+
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mrmaster inputfiles...\n")
 		os.Exit(1)
