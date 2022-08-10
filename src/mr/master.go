@@ -92,6 +92,14 @@ func (m *Master) AssignTask(request ExampleArgs, reply *TaskReply) error {
 
 }
 
+// TaskFinish 任务完成
+func (m *Master) TaskFinish(request TaskFinishArgs, reply *TaskReply) error {
+
+	reply.Accept = true
+
+	return nil
+}
+
 // assignMapTask 分发map任务
 func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
@@ -107,6 +115,7 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
 	reply.FileName = m.Files[mapTaskID]
 	reply.TaskType = MapTaskType
+	reply.NReduce = m.nReduce
 	return nil
 }
 

@@ -47,6 +47,9 @@ func (w *Work) executeMapTask(reply *TaskReply, mapF func(string, string) []KeyV
 		log.Printf("writeKVToFile error err = %v,workID %v", err, reply.WorkID)
 		return err
 	}
+
+	log.Printf("finish writeKVToFile")
+
 	err = w.notifyMapTaskFinish(reply.FileID)
 	if err != nil {
 		log.Printf("notifyTaskFinish error %v")
@@ -62,7 +65,7 @@ func (w *Work) notifyMapTaskFinish(fileID int) error {
 	request.TaskType = MapTaskType
 
 	reply := TaskReply{}
-	call("Master.TaskFinish", request, reply)
+	call("Master.TaskFinish", request, &reply)
 
 	if reply.Accept {
 		log.Printf("task accept work id %v", w.WorkID)
@@ -95,7 +98,7 @@ func (w *Work) getKVByMapF(fileName string, mapf func(string, string) []KeyValue
 	return kva, nil
 }
 
-// writeKVToFile todo
+// writeKVToFile
 func (w *Work) writeKVToFile(fileID int, nReduce int, kv []KeyValue) error {
 	// 将kv写入到mr-workID-nReduce的文件中
 	doubleKV := make([][]KeyValue, nReduce)
