@@ -39,7 +39,10 @@ func (w *Work) executeMapTask(reply *TaskReply, mapF func(string, string) []KeyV
 		log.Printf("getKVByMapF error %v", err)
 		return err
 	}
-	err = w.writeKVToFile(reply.WorkID, reply.NReduce, kv)
+
+	log.Printf("finish getKVByMapF")
+
+	err = w.writeKVToFile(reply.FileID, reply.NReduce, kv)
 	if err != nil {
 		log.Printf("writeKVToFile error err = %v,workID %v", err, reply.WorkID)
 		return err
@@ -56,6 +59,7 @@ func (w *Work) notifyMapTaskFinish(fileID int) error {
 	request := TaskFinishArgs{}
 	request.FileID = fileID
 	request.WorkID = w.WorkID
+	request.TaskType = MapTaskType
 
 	reply := TaskReply{}
 	call("Master.TaskFinish", request, reply)
@@ -92,9 +96,52 @@ func (w *Work) getKVByMapF(fileName string, mapf func(string, string) []KeyValue
 }
 
 // writeKVToFile todo
-func (w *Work) writeKVToFile(workID int, nReduce int, kv []KeyValue) error {
+func (w *Work) writeKVToFile(fileID int, nReduce int, kv []KeyValue) error {
 	// 将kv写入到mr-workID-nReduce的文件中
+	doubleKV := make([][]KeyValue, nReduce)
+
+	for i, _ := range doubleKV {
+		doubleKV[i] = make([]KeyValue, 0)
+	}
+
+	for _, v := range kv {
+		index := w.keyReduceIndex(v.Key, nReduce)
+		doubleKV[index] = append(doubleKV[index], v)
+	}
+
+	for i := 0; i < nReduce; i++ {
+		tempFile, err := os.CreateTemp(".", "mrtemp")
+
+		if err != nil {
+			log.Printf("os.CreateTemp error %v", err)
+			return err
+		}
+
+		enc := json.NewDecoder(tempFile)
+
+		for _, v := range doubleKV[i] {
+			err := enc.Decode(v)
+			if err != nil {
+				log.Printf("Decode error %v", err)
+				return err
+			}
+
+			outName := fmt.Sprintf("mr-%d-%d", fileID, i)
+
+			// 重命名
+			err = os.Rename(tempFile.Name(), outName)
+			if err != nil {
+				log.Printf("os.Remove error %v", err)
+				return err
+			}
+		}
+	}
+
 	return nil
+}
+
+func (w *Work) keyReduceIndex(key string, nReduce int) int {
+	return ihash(key) % nReduce
 }
 
 func (w *Work) executeReduceTask(reply *TaskReply) error {
@@ -203,6 +250,9 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	task := GetTask()
 	w := Work{}
+
+	log.Printf("task is %v", task)
+
 	switch task.TaskType {
 	case MapTaskType:
 		err := w.executeMapTask(task, mapf)
@@ -224,10 +274,10 @@ func Worker(mapf func(string, string) []KeyValue,
 // GetTask worker向master获取一个任务
 func GetTask() *TaskReply {
 	args := ExampleArgs{}
-	reply := TaskReply{}
+	reply := &TaskReply{}
 	call("Master.AssignTask", args, reply)
 
-	return &reply
+	return reply
 }
 
 //

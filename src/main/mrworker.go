@@ -17,6 +17,9 @@ import "fmt"
 import "log"
 
 func main() {
+
+	log.SetFlags(log.Llongfile | log.Ldate)
+
 	if len(os.Args) != 2 {
 		fmt.Fprintf(os.Stderr, "Usage: mrworker xxx.so\n")
 		os.Exit(1)

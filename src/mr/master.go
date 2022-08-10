@@ -7,11 +7,12 @@ import "net/rpc"
 import "net/http"
 
 type Master struct {
-	Files []string // 文件名集合
+	Files   []string // 文件名集合
+	nReduce int      // 有多少个reduce任务
 
 	// 未分配的任务队列
-	UndistributedMapTasks    chan TaskInfo
-	UndistributedReduceTasks chan TaskInfo
+	UndistributedMapTasks    chan int
+	UndistributedReduceTasks chan int
 
 	// 正在运行的任务队列
 	RunningMapTask    chan TaskInfo
@@ -93,15 +94,19 @@ func (m *Master) AssignTask(request ExampleArgs, reply *TaskReply) error {
 
 // assignMapTask 分发map任务
 func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
+
+	log.Printf("assignMapTask")
+
 	if len(m.UndistributedMapTasks) == 0 {
 		// 所有的map任务都被分配了
-		log.Printf("len(UndistributedMapTasks) is 0")
+		log.Printf("all map distribute,len(UndistributedMapTasks) is 0")
 		return nil
 	}
 
-	mapTask := <-m.UndistributedMapTasks
+	mapTaskID := <-m.UndistributedMapTasks
 
-	reply.FileName = m.Files[mapTask.FileID]
+	reply.FileName = m.Files[mapTaskID]
+	reply.TaskType = MapTaskType
 	return nil
 }
 
@@ -116,9 +121,19 @@ func (m *Master) assignReduceTask(request ExampleArgs, reply *TaskReply) error {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeMaster(files []string, nReduce int) *Master {
+
 	m := Master{}
 
 	m.Files = files
+	m.nReduce = nReduce
+	m.IsReduceTaskFinish = false
+	m.IsMapTaskFinish = false
+	m.Files = files
+	m.UndistributedMapTasks = make(chan int, len(files))
+
+	for l, _ := range files {
+		m.UndistributedMapTasks <- l
+	}
 
 	m.server()
 	return &m
