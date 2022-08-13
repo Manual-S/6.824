@@ -125,14 +125,9 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
 	log.Printf("start assignMapTask")
 
-	if len(m.UndistributedMapTasks) == 0 {
+	if len(m.UndistributedMapTasks) == 0 && m.AllocatedMapTask.Size() == 0 {
 		// 所有的map任务都被分配了
-		log.Printf("all map distribute,len(UndistributedMapTasks) is 0")
-		return nil
-	}
-
-	if m.AllocatedMapTask.Size() == 0 {
-		// 所有的map任务都完成了
+		// 且分配的任务都执行完了
 		m.IsMapTaskFinish = true
 		return nil
 	}
@@ -158,15 +153,10 @@ func (m *Master) assignReduceTask(request ExampleArgs, reply *TaskReply) error {
 
 	log.Printf("start assignReduceTask")
 
-	if len(m.UndistributedReduceTasks) == 0 {
+	if len(m.UndistributedReduceTasks) == 0 && m.AllocatedReduceTask.Size() == 0 {
 		// 所有的reduce任务都分配完了
-		log.Printf("All the reduce tasks have been assigned")
-		return nil
-	}
-
-	if m.AllocatedReduceTask.Size() == 0 {
-		// 所有的reduce任务都完成了
 		m.IsReduceTaskFinish = true
+		reply.IsTaskAllFinish = m.IsMapTaskFinish && m.IsReduceTaskFinish
 		return nil
 	}
 
@@ -176,6 +166,11 @@ func (m *Master) assignReduceTask(request ExampleArgs, reply *TaskReply) error {
 
 	reply.TaskType = ReduceTaskType
 	reply.ReduceIndex = reduceTaskID
+	reply.FileCount = len(m.Files)
+
+	reply.IsTaskAllFinish = m.IsMapTaskFinish && m.IsReduceTaskFinish
+
+	log.Printf("assignReduceTask success,ReduceIndex is %v", reduceTaskID)
 
 	return nil
 }
@@ -195,7 +190,10 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.IsMapTaskFinish = false
 	m.Files = files
 	m.UndistributedMapTasks = make(chan int, len(files))
+	m.UndistributedReduceTasks = make(chan int, m.nReduce)
 	m.AllocatedMapTask = NewThreadSafetyMap()
+	m.AllocatedReduceTask = NewThreadSafetyMap()
+
 	for i, _ := range files {
 		m.UndistributedMapTasks <- i
 	}

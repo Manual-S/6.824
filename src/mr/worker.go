@@ -156,9 +156,13 @@ func (w *Work) keyReduceIndex(key string, nReduce int) int {
 	return ihash(key) % nReduce
 }
 
-func (w *Work) executeReduceTask(reply *TaskReply) error {
+func (w *Work) executeReduceTask(reply *TaskReply, reductf func(string, []string) string) error {
+
+	log.Printf("executeReduceTask,reduceIndex is %v", reply.ReduceIndex)
+
 	// 读取map task产生的键值对文件
 	intermediate := make([]KeyValue, 0)
+
 	for i := 0; i < reply.FileCount; i++ {
 		temp, err := w.readIntermediateFile(i, reply.ReduceIndex)
 		if err != nil {
@@ -167,9 +171,8 @@ func (w *Work) executeReduceTask(reply *TaskReply) error {
 		}
 		intermediate = append(intermediate, temp...)
 	}
-	// 对键值对文件进行排序 将文件写入到最终输出里
-	tempFile, err := os.CreateTemp(".", "mrTemp")
 
+	tempFile, err := os.CreateTemp(".", "mrTemp")
 	defer tempFile.Close()
 
 	if err != nil {
@@ -177,8 +180,10 @@ func (w *Work) executeReduceTask(reply *TaskReply) error {
 		return err
 	}
 
+	w.reduceKVToTempFile(intermediate, reductf, tempFile)
+
 	// 重命名文件
-	outName := fmt.Sprintf("mr-out-%s", reply.ReduceIndex)
+	outName := fmt.Sprintf("mr-out-%v", reply.ReduceIndex)
 	err = os.Rename(tempFile.Name(), outName)
 	if err != nil {
 		log.Printf("Rename error %v", err)
@@ -191,6 +196,24 @@ func (w *Work) executeReduceTask(reply *TaskReply) error {
 
 // 上报reduce task完成
 func (w *Work) notifyReduceTaskFinish(reduceIndex int) error {
+
+	request := TaskFinishArgs{}
+	request.ReduceIndex = reduceIndex
+	request.WorkID = w.WorkID
+	request.TaskType = ReduceTaskType
+
+	reply := TaskReply{}
+	call("Master.TaskFinish", request, &reply)
+
+	if reply.Accept {
+		log.Printf("task accept work id %v", w.WorkID)
+		return nil
+	}
+	str := fmt.Sprintf("task accept error work id %v", w.WorkID)
+	err := errors.New(str)
+	log.Printf("%v", err)
+
+	return err
 
 	return nil
 }
@@ -219,9 +242,10 @@ func (w *Work) reduceKVToTempFile(intermediate []KeyValue, reducef func(string, 
 	return nil
 }
 
+// readIntermediateFile 读取map任务的产物
 func (w *Work) readIntermediateFile(fileID int, reduceID int) ([]KeyValue, error) {
-	res := make([]KeyValue, 0)
-	fileName := fmt.Sprintf("mr-%s-%s", fileID, reduceID)
+
+	fileName := fmt.Sprintf("mr-%d-%d", fileID, reduceID)
 	file, err := os.Open(fileName)
 
 	defer file.Close()
@@ -231,12 +255,14 @@ func (w *Work) readIntermediateFile(fileID int, reduceID int) ([]KeyValue, error
 		return nil, err
 	}
 	dec := json.NewDecoder(file)
+	res := make([]KeyValue, 0)
 
 	for {
 		var t KeyValue
-		err := dec.Decode(&t)
+		err = dec.Decode(&t)
 		if err != nil {
-			// todo 这里代码要改动一下
+			log.Printf("Decode error %v", err)
+			// todo 这里应该返回错误 但是有时候err的类型是io.EOF 这里要找一下问题
 			break
 		}
 		res = append(res, t)
@@ -275,13 +301,11 @@ func Worker(mapf func(string, string) []KeyValue,
 				return
 			}
 		case ReduceTaskType:
-			err := w.executeReduceTask(task)
+			err := w.executeReduceTask(task, reducef)
 			if err != nil {
 				log.Printf("executeReduceTask error %v", err)
 				return
 			}
-		default:
-			panic("Task Type error")
 		}
 	}
 
