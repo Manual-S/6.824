@@ -23,9 +23,10 @@ type ExampleReply struct {
 }
 
 type TaskFinishArgs struct {
-	FileID   int // 文件ID
-	WorkID   int
-	TaskType int // 任务类型
+	FileID      int // 文件ID
+	WorkID      int
+	TaskType    int // 任务类型
+	ReduceIndex int
 }
 
 // TaskReply master和worker通信的reply

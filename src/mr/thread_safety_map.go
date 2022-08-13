@@ -39,3 +39,9 @@ func (t *ThreadSafetyMap) Delete(key int) {
 	defer t.lock.Unlock()
 	delete(t.hash, key)
 }
+
+func (t *ThreadSafetyMap) Size() int {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	return len(t.hash)
+}

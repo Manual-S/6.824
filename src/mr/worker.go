@@ -185,12 +185,13 @@ func (w *Work) executeReduceTask(reply *TaskReply) error {
 		return err
 	}
 	// 上报任务完成
-
+	w.notifyReduceTaskFinish(reply.ReduceIndex)
 	return nil
 }
 
 // 上报reduce task完成
-func (w *Work) notifyReduceTaskFinish() error {
+func (w *Work) notifyReduceTaskFinish(reduceIndex int) error {
+
 	return nil
 }
 

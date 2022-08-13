@@ -97,8 +97,13 @@ func (m *Master) AssignTask(request ExampleArgs, reply *TaskReply) error {
 // TaskFinish 任务完成
 func (m *Master) TaskFinish(request TaskFinishArgs, reply *TaskReply) error {
 
-	if request.TaskType == MapTaskType {
+	switch request.TaskType {
+	case MapTaskType:
 		m.mapTaskFinish(request, reply)
+	case ReduceTaskType:
+		m.reduceTaskFinish(request, reply)
+	default:
+		panic("other TaskType")
 	}
 
 	return nil
@@ -110,8 +115,9 @@ func (m *Master) mapTaskFinish(request TaskFinishArgs, reply *TaskReply) {
 	reply.Accept = true
 }
 
-func (m *Master) reduceTaskFinish() {
-
+func (m *Master) reduceTaskFinish(request TaskFinishArgs, reply *TaskReply) {
+	m.AllocatedReduceTask.Delete(request.ReduceIndex)
+	reply.Accept = true
 }
 
 // assignMapTask 分发map任务
@@ -122,6 +128,12 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 	if len(m.UndistributedMapTasks) == 0 {
 		// 所有的map任务都被分配了
 		log.Printf("all map distribute,len(UndistributedMapTasks) is 0")
+		return nil
+	}
+
+	if m.AllocatedMapTask.Size() == 0 {
+		// 所有的map任务都完成了
+		m.IsMapTaskFinish = true
 		return nil
 	}
 
@@ -143,6 +155,28 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
 // assignReduceTask 分发reduce任务
 func (m *Master) assignReduceTask(request ExampleArgs, reply *TaskReply) error {
+
+	log.Printf("start assignReduceTask")
+
+	if len(m.UndistributedReduceTasks) == 0 {
+		// 所有的reduce任务都分配完了
+		log.Printf("All the reduce tasks have been assigned")
+		return nil
+	}
+
+	if m.AllocatedReduceTask.Size() == 0 {
+		// 所有的reduce任务都完成了
+		m.IsReduceTaskFinish = true
+		return nil
+	}
+
+	reduceTaskID := <-m.UndistributedReduceTasks
+
+	m.AllocatedReduceTask.Set(reduceTaskID, true)
+
+	reply.TaskType = ReduceTaskType
+	reply.ReduceIndex = reduceTaskID
+
 	return nil
 }
 
@@ -162,8 +196,12 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.Files = files
 	m.UndistributedMapTasks = make(chan int, len(files))
 	m.AllocatedMapTask = NewThreadSafetyMap()
-	for l, _ := range files {
-		m.UndistributedMapTasks <- l
+	for i, _ := range files {
+		m.UndistributedMapTasks <- i
+	}
+
+	for i := 0; i < m.nReduce; i++ {
+		m.UndistributedReduceTasks <- i
 	}
 
 	m.server()
