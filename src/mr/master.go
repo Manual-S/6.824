@@ -134,6 +134,8 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 	reply.NReduce = m.nReduce
 	reply.FileID = mapTaskID
 
+	reply.IsTaskAllFinish = m.IsMapTaskFinish && m.IsReduceTaskFinish
+
 	log.Printf("assignMapTask suc,fileID is %v", mapTaskID)
 
 	return nil

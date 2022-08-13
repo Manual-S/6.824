@@ -260,27 +260,31 @@ func ihash(key string) int {
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	task := GetTask()
 	w := Work{}
+	task := &TaskReply{}
 
-	log.Printf("task is %v", task)
+	for !task.IsTaskAllFinish {
+		task = GetTask()
 
-	switch task.TaskType {
-	case MapTaskType:
-		err := w.executeMapTask(task, mapf)
-		if err != nil {
-			log.Printf("executeMapTask error %v", err)
-			return
+		switch task.TaskType {
+		case MapTaskType:
+			err := w.executeMapTask(task, mapf)
+			if err != nil {
+				log.Printf("executeMapTask error %v", err)
+				return
+			}
+		case ReduceTaskType:
+			err := w.executeReduceTask(task)
+			if err != nil {
+				log.Printf("executeReduceTask error %v", err)
+				return
+			}
+		default:
+			panic("Task Type error")
 		}
-	case ReduceTaskType:
-		err := w.executeReduceTask(task)
-		if err != nil {
-			log.Printf("executeReduceTask error %v", err)
-			return
-		}
-	default:
-		panic("Task Type error")
 	}
+
+	log.Printf("no more task,exit,bye!!!")
 }
 
 // GetTask worker向master获取一个任务

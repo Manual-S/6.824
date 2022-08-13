@@ -30,10 +30,13 @@ type TaskFinishArgs struct {
 
 // TaskReply master和worker通信的reply
 type TaskReply struct {
-	FileName    string // 文件名
-	FileID      int    // 文件ID
-	FileCount   int
-	NReduce     int
+	FileName        string // 文件名
+	FileID          int    // 文件ID
+	IsTaskAllFinish bool   // 标记全部任务是否都完成了
+	FileCount       int
+
+	NReduce int // nReduce的个数
+
 	ReduceIndex int
 	WorkID      int
 	TaskType    int                             // 任务类型
