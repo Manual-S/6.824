@@ -1,6 +1,8 @@
 package mr
 
-import "log"
+import (
+	"log"
+)
 import "net"
 import "os"
 import "net/rpc"
@@ -18,9 +20,9 @@ type Master struct {
 	RunningMapTask    chan TaskInfo
 	RunningReduceTask chan TaskInfo
 
-	// 已经完成的任务队列
-	FinishMapTask    chan TaskInfo
-	FinishReduceTask chan TaskInfo
+	// 已分配的任务
+	AllocatedMapTask    ThreadSafetyMap
+	AllocatedReduceTask ThreadSafetyMap
 
 	IsMapTaskFinish    bool // 标记map任务是否完成
 	IsReduceTaskFinish bool // 标记reduce任务是否完成
@@ -95,15 +97,27 @@ func (m *Master) AssignTask(request ExampleArgs, reply *TaskReply) error {
 // TaskFinish 任务完成
 func (m *Master) TaskFinish(request TaskFinishArgs, reply *TaskReply) error {
 
-	reply.Accept = true
+	if request.TaskType == MapTaskType {
+		m.mapTaskFinish(request, reply)
+	}
 
 	return nil
+}
+
+func (m *Master) mapTaskFinish(request TaskFinishArgs, reply *TaskReply) {
+	// 从map中移除分配的任务id
+	m.AllocatedMapTask.Delete(request.FileID)
+	reply.Accept = true
+}
+
+func (m *Master) reduceTaskFinish() {
+
 }
 
 // assignMapTask 分发map任务
 func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
-	log.Printf("assignMapTask")
+	log.Printf("start assignMapTask")
 
 	if len(m.UndistributedMapTasks) == 0 {
 		// 所有的map任务都被分配了
@@ -113,9 +127,15 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
 	mapTaskID := <-m.UndistributedMapTasks
 
+	m.AllocatedMapTask.Set(mapTaskID, true)
+
 	reply.FileName = m.Files[mapTaskID]
 	reply.TaskType = MapTaskType
 	reply.NReduce = m.nReduce
+	reply.FileID = mapTaskID
+
+	log.Printf("assignMapTask suc,fileID is %v", mapTaskID)
+
 	return nil
 }
 
@@ -139,7 +159,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	m.IsMapTaskFinish = false
 	m.Files = files
 	m.UndistributedMapTasks = make(chan int, len(files))
-
+	m.AllocatedMapTask = NewThreadSafetyMap()
 	for l, _ := range files {
 		m.UndistributedMapTasks <- l
 	}

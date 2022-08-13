@@ -34,6 +34,9 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 // executeMapTask 处理MapTask
 func (w *Work) executeMapTask(reply *TaskReply, mapF func(string, string) []KeyValue) error {
+
+	log.Printf("executeMapTask fileID is %v", reply.FileID)
+
 	kv, err := w.getKVByMapF(reply.FileName, mapF)
 	if err != nil {
 		log.Printf("getKVByMapF error %v", err)
@@ -58,6 +61,7 @@ func (w *Work) executeMapTask(reply *TaskReply, mapF func(string, string) []KeyV
 	return nil
 }
 
+// notifyMapTaskFinish
 func (w *Work) notifyMapTaskFinish(fileID int) error {
 	request := TaskFinishArgs{}
 	request.FileID = fileID
@@ -113,30 +117,35 @@ func (w *Work) writeKVToFile(fileID int, nReduce int, kv []KeyValue) error {
 	}
 
 	for i := 0; i < nReduce; i++ {
-		tempFile, err := os.CreateTemp(".", "mrtemp")
+		//tempFile, err := os.CreateTemp(".", "mr_temp")
 
+		//if err != nil {
+		//	log.Printf("os.CreateTemp error %v", err)
+		//	return err
+		//}
+		outName := fmt.Sprintf("mr-%d-%d", fileID, i)
+		outFile, err := os.Create(outName)
 		if err != nil {
 			log.Printf("os.CreateTemp error %v", err)
 			return err
 		}
-
-		enc := json.NewDecoder(tempFile)
+		enc := json.NewEncoder(outFile)
 
 		for _, v := range doubleKV[i] {
-			err := enc.Decode(v)
+			err := enc.Encode(v)
 			if err != nil {
 				log.Printf("Decode error %v", err)
 				return err
 			}
 
-			outName := fmt.Sprintf("mr-%d-%d", fileID, i)
-
-			// 重命名
-			err = os.Rename(tempFile.Name(), outName)
-			if err != nil {
-				log.Printf("os.Remove error %v", err)
-				return err
-			}
+			//outName := fmt.Sprintf("mr-%d-%d", fileID, i)
+			//
+			//// 重命名
+			//err = os.Rename(tempFile.Name(), outName)
+			//if err != nil {
+			//	log.Printf("os.Remove error %v,index is %v", err, index)
+			//	return err
+			//}
 		}
 	}
 
