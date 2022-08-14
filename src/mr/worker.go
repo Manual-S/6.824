@@ -169,7 +169,6 @@ func (w *Work) executeReduceTask(reply *TaskReply, reductf func(string, []string
 	}
 
 	tempFile, err := os.CreateTemp(".", "mrTemp")
-	defer tempFile.Close()
 
 	if err != nil {
 		log.Printf("CreateTemp error %v", err)
@@ -177,6 +176,7 @@ func (w *Work) executeReduceTask(reply *TaskReply, reductf func(string, []string
 	}
 
 	w.reduceKVToTempFile(intermediate, reductf, tempFile)
+	tempFile.Close()
 
 	// 重命名文件
 	outName := fmt.Sprintf("mr-out-%v", reply.ReduceIndex)

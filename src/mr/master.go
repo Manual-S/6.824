@@ -2,6 +2,7 @@ package mr
 
 import (
 	"log"
+	"time"
 )
 import "net"
 import "os"
@@ -16,16 +17,14 @@ type Master struct {
 	UndistributedMapTasks    chan int
 	UndistributedReduceTasks chan int
 
-	// 正在运行的任务队列
-	RunningMapTask    chan TaskInfo
-	RunningReduceTask chan TaskInfo
-
 	// 已分配的任务
 	AllocatedMapTask    ThreadSafetyMap
 	AllocatedReduceTask ThreadSafetyMap
 
 	IsMapTaskFinish    bool // 标记map任务是否完成
 	IsReduceTaskFinish bool // 标记reduce任务是否完成
+
+	MaxWorkTime float64 // 最大工作时间
 }
 
 // Your code here -- RPC handlers for the worker to call.
@@ -134,7 +133,11 @@ func (m *Master) assignMapTask(request ExampleArgs, reply *TaskReply) error {
 
 	mapTaskID := <-m.UndistributedMapTasks
 
-	m.AllocatedMapTask.Set(mapTaskID, true)
+	task := Task{
+		StartTime: time.Now(),
+	}
+
+	m.AllocatedMapTask.Set(mapTaskID, task)
 
 	reply.FileName = m.Files[mapTaskID]
 	reply.TaskType = MapTaskType
@@ -162,7 +165,11 @@ func (m *Master) assignReduceTask(request ExampleArgs, reply *TaskReply) error {
 
 	reduceTaskID := <-m.UndistributedReduceTasks
 
-	m.AllocatedReduceTask.Set(reduceTaskID, true)
+	task := Task{
+		StartTime: time.Now(),
+	}
+
+	m.AllocatedReduceTask.Set(reduceTaskID, task)
 
 	reply.TaskType = ReduceTaskType
 	reply.ReduceIndex = reduceTaskID
@@ -175,6 +182,40 @@ func (m *Master) assignReduceTask(request ExampleArgs, reply *TaskReply) error {
 	return nil
 }
 
+// loopAllWorkers 清除所有的超时任务
+func (m *Master) loopAllWorkers() {
+
+	for true {
+		time.Sleep(5 * time.Second)
+		m.loopAllMapWorkers()
+		m.loopAllReduceWorkers()
+	}
+
+}
+
+func (m *Master) loopAllMapWorkers() {
+	m.AllocatedMapTask.RemoveTimeoutTask(m.UndistributedMapTasks, m.MaxWorkTime)
+}
+
+func (m *Master) loopAllReduceWorkers() {
+	m.AllocatedReduceTask.RemoveTimeoutTask(m.UndistributedReduceTasks, m.MaxWorkTime)
+}
+
+func (t *ThreadSafetyMap) RemoveTimeoutTask(UndistributedMapTasks chan int, maxTime float64) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+
+	now := time.Now()
+
+	for k, v := range t.hash {
+		if now.Sub(v.StartTime).Seconds() > maxTime {
+			// 说明当前的work任务没有完成
+			delete(t.hash, k)
+			UndistributedMapTasks <- k
+		}
+	}
+}
+
 // MakeMaster
 // create a Master.
 // main/mrmaster.go calls this function.
@@ -184,6 +225,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 
 	m := Master{}
 
+	m.MaxWorkTime = 10 // 10秒
 	m.Files = files
 	m.nReduce = nReduce
 	m.IsReduceTaskFinish = false
@@ -201,7 +243,7 @@ func MakeMaster(files []string, nReduce int) *Master {
 	for i := 0; i < m.nReduce; i++ {
 		m.UndistributedReduceTasks <- i
 	}
-
+	go m.loopAllWorkers()
 	m.server()
 	return &m
 }

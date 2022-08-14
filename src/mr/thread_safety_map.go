@@ -6,12 +6,12 @@ import (
 )
 
 type ThreadSafetyMap struct {
-	hash map[int]interface{}
+	hash map[int]Task
 	lock sync.Mutex
 }
 
 func NewThreadSafetyMap() ThreadSafetyMap {
-	hash := make(map[int]interface{}, 0)
+	hash := make(map[int]Task, 0)
 	lock := sync.Mutex{}
 	return ThreadSafetyMap{
 		hash: hash,
@@ -19,13 +19,13 @@ func NewThreadSafetyMap() ThreadSafetyMap {
 	}
 }
 
-func (t *ThreadSafetyMap) Set(key int, value interface{}) {
+func (t *ThreadSafetyMap) Set(key int, value Task) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	t.hash[key] = value
 }
 
-func (t *ThreadSafetyMap) Get(key int) interface{} {
+func (t *ThreadSafetyMap) Get(key int) Task {
 	t.lock.Lock()
 
 	defer t.lock.Unlock()

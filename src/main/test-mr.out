@@ -7,14 +7,12 @@ unexpected EOF
 --- indexer test: PASS
 *** Starting map parallelism test.
 --- map parallelism test: PASS
-unexpected EOF
 *** Starting reduce parallelism test.
---- reduce parallelism test: PASS
 unexpected EOF
+--- reduce parallelism test: PASS
 *** Starting crash test.
 unexpected EOF
 unexpected EOF
 unexpected EOF
---- crash output is not the same as mr-correct-crash.txt
---- crash test: FAIL
-*** FAILED SOME TESTS
+--- crash test: PASS
+*** PASSED ALL TESTS
