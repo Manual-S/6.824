@@ -214,8 +214,6 @@ func (w *Work) notifyReduceTaskFinish(reduceIndex int) error {
 	log.Printf("%v", err)
 
 	return err
-
-	return nil
 }
 
 func (w *Work) reduceKVToTempFile(intermediate []KeyValue, reducef func(string, []string) string, tempFile *os.File) error {
@@ -261,7 +259,7 @@ func (w *Work) readIntermediateFile(fileID int, reduceID int) ([]KeyValue, error
 		var t KeyValue
 		err = dec.Decode(&t)
 		if err != nil {
-			log.Printf("Decode error %v", err)
+			//log.Printf("Decode error %v", err)
 			// todo 这里应该返回错误 但是有时候err的类型是io.EOF 这里要找一下问题
 			break
 		}
