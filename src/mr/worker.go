@@ -117,19 +117,14 @@ func (w *Work) writeKVToFile(fileID int, nReduce int, kv []KeyValue) error {
 	}
 
 	for i := 0; i < nReduce; i++ {
-		//tempFile, err := os.CreateTemp(".", "mr_temp")
+		tempFile, err := os.CreateTemp(".", "mr_temp")
 
-		//if err != nil {
-		//	log.Printf("os.CreateTemp error %v", err)
-		//	return err
-		//}
-		outName := fmt.Sprintf("mr-%d-%d", fileID, i)
-		outFile, err := os.Create(outName)
 		if err != nil {
 			log.Printf("os.CreateTemp error %v", err)
 			return err
 		}
-		enc := json.NewEncoder(outFile)
+
+		enc := json.NewEncoder(tempFile)
 
 		for _, v := range doubleKV[i] {
 			err := enc.Encode(v)
@@ -137,15 +132,16 @@ func (w *Work) writeKVToFile(fileID int, nReduce int, kv []KeyValue) error {
 				log.Printf("Decode error %v", err)
 				return err
 			}
+		}
 
-			//outName := fmt.Sprintf("mr-%d-%d", fileID, i)
-			//
-			//// 重命名
-			//err = os.Rename(tempFile.Name(), outName)
-			//if err != nil {
-			//	log.Printf("os.Remove error %v,index is %v", err, index)
-			//	return err
-			//}
+		outName := fmt.Sprintf("mr-%d-%d", fileID, i)
+
+		tempFile.Close()
+		// 重命名
+		err = os.Rename(tempFile.Name(), outName)
+		if err != nil {
+			log.Printf("os.Rename error,err = %v,index is %v", err, i)
+			return err
 		}
 	}
 

@@ -1,18 +1,20 @@
 *** Starting wc test.
---- wc output is not the same as mr-correct-wc.txt
---- wc test: FAIL
+unexpected EOF
+unexpected EOF
+--- wc test: PASS
 *** Starting indexer test.
---- indexer output is not the same as mr-correct-indexer.txt
---- indexer test: FAIL
+unexpected EOF
+--- indexer test: PASS
 *** Starting map parallelism test.
---- saw 0 workers rather than 2
---- map parallelism test: FAIL
---- map workers did not run in parallel
---- map parallelism test: FAIL
+--- map parallelism test: PASS
+unexpected EOF
 *** Starting reduce parallelism test.
---- too few parallel reduces.
---- reduce parallelism test: FAIL
+--- reduce parallelism test: PASS
+unexpected EOF
 *** Starting crash test.
+unexpected EOF
+unexpected EOF
+unexpected EOF
 --- crash output is not the same as mr-correct-crash.txt
 --- crash test: FAIL
 *** FAILED SOME TESTS
