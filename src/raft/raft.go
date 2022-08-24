@@ -17,7 +17,10 @@ package raft
 //   in the same server.
 //
 
-import "sync"
+import (
+	"sync"
+	"time"
+)
 import "sync/atomic"
 import "../labrpc"
 
@@ -45,8 +48,8 @@ type ApplyMsg struct {
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
-	peers     []*labrpc.ClientEnd // RPC end points of all peers
+	mu        sync.Mutex          // Lock to protect shared access to this peer's state 锁 并发保护
+	peers     []*labrpc.ClientEnd // RPC end points of all peers整个集群信息，集群中的每一台机器是一个peer,它在peers这个数组的下标为me
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
@@ -54,9 +57,9 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	currentTerm int  // 服务器已知最新的任期
-	votedFor    *int // 当前任期内收到选票的候选人 如果没有投给任何候选人 则为空
-
+	currentTerm int       // 服务器已知最新的任期
+	votedFor    *int      // 当前任期内收到选票的候选人 如果没有投给任何候选人 则为空
+	TimeOut     time.Time // 超时时间
 }
 
 // return currentTerm and whether this server
@@ -87,6 +90,7 @@ func (rf *Raft) persist() {
 
 //
 // restore previously persisted state.
+// 恢复之前的一致性状态
 //
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
@@ -107,12 +111,20 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
+type AppendEntriesArgs struct {
+}
+
+type AppendEntriesReply struct {
+}
+
 //
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	CandidateTerm  int // 要求投票的任期
+	CandidateIndex int // 候选人的id
 }
 
 //
@@ -121,16 +133,29 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	votedFor *int // 将票投给谁
+
 }
 
 //
 // example RequestVote RPC handler.
 //
+// RequestVote 是follower收到candidate要求投票的rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	if args.CandidateTerm < rf.currentTerm {
+		// candidate的任期比当前节点的任期小 拒绝投票
+		reply.votedFor = nil
+		return
+	}
+
+	if rf.votedFor != nil {
+		rf.votedFor = &args.CandidateIndex
+		reply.votedFor = &rf.me
+	}
 }
 
-//
+// 发送请求投票信息到follower的rpc
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
 // expects RPC arguments in args.
