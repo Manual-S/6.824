@@ -75,6 +75,7 @@ type Raft struct {
 
 	electionTimeout  int64 // 超时时间
 	electionDuration int64
+	timeoutHeartbeat int64 // leader发送心跳包的时间
 }
 
 // return currentTerm and whether this server
@@ -127,9 +128,14 @@ func (rf *Raft) readPersist(data []byte) {
 }
 
 type AppendEntriesArgs struct {
+	LeaderTerm int // leader的任期
+	LeaderID   int // leader的id
+
 }
 
 type AppendEntriesReply struct {
+	Term    int // 当前任期
+	Success bool
 }
 
 //
@@ -171,6 +177,28 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 }
 
+// AppendEntries 接受到AppendEntries后
+func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	if args.LeaderTerm < rf.currentTerm {
+		// 领导人的任期比当前的任期小 返回假
+		reply.Success = false
+		reply.Term = rf.me
+		return
+	}
+
+	// 重置超时选举时间
+	rf.resetTimerElection()
+
+	if args.LeaderTerm > rf.currentTerm || rf.State != Follower {
+		rf.currentTerm = args.LeaderTerm
+		rf.State = Follower
+	}
+
+	reply.Success = true
+	reply.Term = rf.me
+	return
+}
+
 // 发送请求投票信息
 // example code to send a RequestVote RPC to a server.
 // server is the index of the target server in rf.peers[].
@@ -202,6 +230,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 //
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
 	return ok
 }
 
@@ -262,6 +295,35 @@ func (rf *Raft) mainLoop() {
 	}
 }
 
+// 发送心跳包
+func (rf *Raft) sendHeartbeat() {
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+
+		go func(id int) {
+			args := AppendEntriesArgs{}
+			args.LeaderTerm = rf.currentTerm
+			args.LeaderID = rf.me
+
+			reply := AppendEntriesReply{}
+			if rf.sendAppendEntries(id, &args, &reply) {
+				// 广播的心跳包被follower接受到了
+				if reply.Success {
+
+				} else {
+					// 领导人的任期小于接受者的任期
+					rf.State = Follower
+				}
+			} else {
+				log.Printf("")
+			}
+		}(i)
+	}
+}
+
+// startElection 开始选举流程
 func (rf *Raft) startElection() {
 	rf.State = Candidate
 	rf.currentTerm = rf.currentTerm + 1
@@ -310,6 +372,7 @@ func (rf *Raft) startElection() {
 
 }
 
+// resetTimerElection 重置超时选举时间
 func (rf *Raft) resetTimerElection() {
 	rand.Seed(time.Now().Unix())
 	// todo 这里对时间的处理可能有问题
@@ -345,8 +408,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-
-	// Your initialization code here (2A, 2B, 2C).
+	rf.timeoutHeartbeat = 100 // 100ms
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
