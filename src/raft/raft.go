@@ -52,6 +52,12 @@ const (
 	Candidate = 3
 )
 
+var StateMapping = map[int]string{
+	Leader:    "leader",
+	Follower:  "follower",
+	Candidate: "candidate",
+}
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -144,8 +150,8 @@ type AppendEntriesReply struct {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	CandidateTerm int // 要求投票的任期
-	CandidateId   int // 候选人的id
+	Term        int // 候选人的任期号
+	CandidateId int // 候选人的id
 }
 
 //
@@ -154,9 +160,9 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	votedFor  *int // 将票投给谁
-	votedTerm int  // 投票人的任期
-	votedID   int  // 投票人的id
+	VoteGranted bool // 当候选人赢得了此章选票时为真
+	Term        int  // 当前任期号
+	FollowerId  int  // 投票人的id
 }
 
 //
@@ -165,16 +171,23 @@ type RequestVoteReply struct {
 // RequestVote 是follower收到candidate要求投票的rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-	if args.CandidateTerm < rf.currentTerm {
+	if args.Term < rf.currentTerm {
 		// candidate的任期比当前节点的任期小 拒绝投票
-		reply.votedFor = nil
+		reply.VoteGranted = false
+		reply.Term = rf.currentTerm
+		reply.FollowerId = rf.me
 		return
 	}
 
 	if rf.votedFor != nil {
-		rf.votedFor = &args.CandidateId
-		reply.votedFor = &rf.me
+		reply.Term = rf.currentTerm
+		reply.VoteGranted = true
+		return
 	}
+
+	reply.Term = rf.currentTerm
+	reply.VoteGranted = false
+	return
 }
 
 // AppendEntries 接受到AppendEntries后
@@ -287,7 +300,7 @@ func (rf *Raft) mainLoop() {
 	for {
 		select {
 		case <-rf.electionChan:
-			// 开启投票流程
+			// 开启选举流程
 			rf.startElection()
 		case <-rf.heartbeatChan:
 			// 广播心跳包
@@ -340,27 +353,28 @@ func (rf *Raft) startElection() {
 		go func(id int) {
 			// 发送广播
 			args := RequestVoteArgs{}
-			args.CandidateTerm = rf.currentTerm
+			args.Term = rf.currentTerm
 			args.CandidateId = rf.me
 			if rf.sendRequestVote(id, &args, &reply) {
 
-				if rf.currentTerm < reply.votedTerm {
-					log.Printf("currentTerm is %v,votedTerm is %v,Failed vote", rf.currentTerm, reply.votedTerm)
+				if rf.currentTerm < reply.Term {
+					log.Printf("currentTerm is %v,votedTerm is %v,Failed vote", rf.currentTerm, reply.Term)
 					rf.State = Follower
-					rf.currentTerm = reply.votedTerm
+					rf.currentTerm = reply.Term
 					return
 				}
 
-				if reply.votedFor != nil && *(reply.votedFor) == rf.me {
+				if reply.VoteGranted {
 					votes++
 
 					if votes > len(rf.peers)/2 && rf.State == Candidate {
 						// 成为leader
 						rf.State = Leader
 						// 发送广播包 leader当选
+						rf.sendHeartbeat()
 					}
 				} else {
-					log.Printf("votedId %v reject vote,", reply.votedID)
+					log.Printf("votedId %v reject vote,", reply.Term)
 				}
 			} else {
 				// 发送广播失败
@@ -374,21 +388,30 @@ func (rf *Raft) startElection() {
 
 // resetTimerElection 重置超时选举时间
 func (rf *Raft) resetTimerElection() {
-	rand.Seed(time.Now().Unix())
+	rand.Seed(time.Now().UnixNano())
+
 	// todo 这里对时间的处理可能有问题
-	rf.electionDuration = rand.Int63n(150)
-	rf.electionTimeout = time.Now().UnixNano() + rf.electionDuration
+	rf.electionDuration = rand.Int63n(150) + rf.timeoutHeartbeat*5
+	rf.electionTimeout = time.Now().UnixNano() + rf.electionDuration*1000000
 }
 
-// 超时后向chan中发送消息
+// 超时后向chan中发送消息 然后开始选举
 func (rf *Raft) timerElection() {
 	for {
-		if time.Now().UnixNano()-rf.electionTimeout > 0 {
-			log.Printf("%d timeout, current term %v,current status %v", rf.me, rf.currentTerm, rf.State)
+		timeNow := time.Now().UnixNano()
+		if timeNow-rf.electionTimeout > 0 {
+			log.Printf("raft id = %d timeout, current term %v,current status %v "+
+				"current time %d,electionTimeout is %d",
+				rf.me, rf.currentTerm, StateMapping[rf.State], timeNow/1e6, rf.electionTimeout/1e6)
 			rf.electionChan <- true
 		}
 		time.Sleep(time.Millisecond * 10)
 	}
+}
+
+// 超时后向chan中发送消息 然后发送心跳包
+func (rf *Raft) timerHeartbeat() {
+	rf.heartbeatChan <- true
 }
 
 //
@@ -409,12 +432,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 	rf.timeoutHeartbeat = 100 // 100ms
-
+	rf.electionChan = make(chan bool)
+	rf.heartbeatChan = make(chan bool)
+	rf.State = Follower
+	rf.currentTerm = 0
+	rf.votedFor = nil
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	rf.resetTimerElection()
 	go rf.mainLoop()
 	go rf.timerElection()
-
+	go rf.timerHeartbeat()
 	return rf
 }
