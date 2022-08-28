@@ -8,7 +8,10 @@ package raft
 // test with the original before submitting.
 //
 
-import "testing"
+import (
+	"log"
+	"testing"
+)
 import "fmt"
 import "time"
 import "math/rand"
@@ -20,6 +23,9 @@ import "sync"
 const RaftElectionTimeout = 1000 * time.Millisecond
 
 func TestInitialElection2A(t *testing.T) {
+
+	log.SetFlags(log.Llongfile | log.Ldate)
+
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()

@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"context"
 	"log"
 	"math/rand"
 	"sync"
@@ -79,9 +80,12 @@ type Raft struct {
 	electionChan  chan bool
 	heartbeatChan chan bool
 
-	electionTimeout  int64 // 超时时间
+	electionTimeout  int64 // 发起选举超时时间
 	electionDuration int64
 	timeoutHeartbeat int64 // leader发送心跳包的时间
+	heartbeatTimeout int64 // 发送心跳包
+
+	ctx context.Context
 }
 
 // return currentTerm and whether this server
@@ -171,11 +175,16 @@ type RequestVoteReply struct {
 // RequestVote 是follower收到candidate要求投票的rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
 	if args.Term < rf.currentTerm {
 		// candidate的任期比当前节点的任期小 拒绝投票
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		reply.FollowerId = rf.me
+		log.Printf("logID = %v,curID = %v curTerm = %v,argsID = %v,argsTerm = %v",
+			rf.ctx.Value("logID"), rf.me, rf.currentTerm, args.CandidateId, args.Term)
 		return
 	}
 
@@ -304,12 +313,22 @@ func (rf *Raft) mainLoop() {
 			rf.startElection()
 		case <-rf.heartbeatChan:
 			// 广播心跳包
+			rf.sendHeartbeat()
 		}
 	}
 }
 
-// 发送心跳包
+// sendHeartbeat 发送心跳包
 func (rf *Raft) sendHeartbeat() {
+	rf.mu.Lock()
+
+	if rf.State != Leader {
+		rf.mu.Unlock()
+		return
+	}
+
+	rf.resetTimerHeartbeat()
+
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
 			continue
@@ -324,7 +343,7 @@ func (rf *Raft) sendHeartbeat() {
 			if rf.sendAppendEntries(id, &args, &reply) {
 				// 广播的心跳包被follower接受到了
 				if reply.Success {
-
+					log.Printf("cur leader %v", rf.me)
 				} else {
 					// 领导人的任期小于接受者的任期
 					rf.State = Follower
@@ -338,12 +357,12 @@ func (rf *Raft) sendHeartbeat() {
 
 // startElection 开始选举流程
 func (rf *Raft) startElection() {
+	rf.mu.Lock()
 	rf.State = Candidate
 	rf.currentTerm = rf.currentTerm + 1
 
 	votes := 1 // 自己投自己一票
-
-	reply := RequestVoteReply{}
+	rf.mu.Unlock()
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -351,10 +370,17 @@ func (rf *Raft) startElection() {
 		}
 
 		go func(id int) {
+			rf.mu.Lock()
 			// 发送广播
 			args := RequestVoteArgs{}
 			args.Term = rf.currentTerm
 			args.CandidateId = rf.me
+			rf.mu.Unlock()
+			var reply RequestVoteReply
+			ok := rf.sendRequestVote(id, &args, &reply)
+			log.Printf("id = %v,logID = %v,ok = %v, reply = %v args = %v",
+				id, rf.ctx.Value("logID"), ok, reply, args)
+			return
 			if rf.sendRequestVote(id, &args, &reply) {
 
 				if rf.currentTerm < reply.Term {
@@ -368,17 +394,19 @@ func (rf *Raft) startElection() {
 					votes++
 
 					if votes > len(rf.peers)/2 && rf.State == Candidate {
+						log.Printf("%d is Leader", rf.me)
 						// 成为leader
 						rf.State = Leader
 						// 发送广播包 leader当选
 						rf.sendHeartbeat()
 					}
 				} else {
-					log.Printf("votedId %v reject vote,", reply.Term)
+					log.Printf("logID = %v,scurID %v,curTerm %v,votedId is %v votedTerm is %v,reject voted",
+						rf.ctx.Value("logID"), rf.me, rf.currentTerm, reply.FollowerId, reply.Term)
 				}
 			} else {
-				// 发送广播失败
-				log.Printf("sendRequestVote error,id is %v", id)
+				// 发送投票失败
+				log.Printf("rpc error %v", id)
 			}
 
 		}(i)
@@ -389,20 +417,18 @@ func (rf *Raft) startElection() {
 // resetTimerElection 重置超时选举时间
 func (rf *Raft) resetTimerElection() {
 	rand.Seed(time.Now().UnixNano())
-
 	// todo 这里对时间的处理可能有问题
 	rf.electionDuration = rand.Int63n(150) + rf.timeoutHeartbeat*5
-	rf.electionTimeout = time.Now().UnixNano() + rf.electionDuration*1000000
+	rf.electionTimeout = time.Now().UnixMilli() + rf.electionDuration
 }
 
 // 超时后向chan中发送消息 然后开始选举
 func (rf *Raft) timerElection() {
 	for {
-		timeNow := time.Now().UnixNano()
+		timeNow := time.Now().UnixMilli()
 		if timeNow-rf.electionTimeout > 0 {
-			log.Printf("raft id = %d timeout, current term %v,current status %v "+
-				"current time %d,electionTimeout is %d",
-				rf.me, rf.currentTerm, StateMapping[rf.State], timeNow/1e6, rf.electionTimeout/1e6)
+			log.Printf("logID = %v,raft id = %d timeout, current term %v,current status %v",
+				rf.ctx.Value("logID"), rf.me, rf.currentTerm, StateMapping[rf.State])
 			rf.electionChan <- true
 		}
 		time.Sleep(time.Millisecond * 10)
@@ -411,7 +437,20 @@ func (rf *Raft) timerElection() {
 
 // 超时后向chan中发送消息 然后发送心跳包
 func (rf *Raft) timerHeartbeat() {
-	rf.heartbeatChan <- true
+	for {
+		rf.mu.Lock()
+		if time.Now().UnixMilli()-rf.heartbeatTimeout > 0 {
+			rf.heartbeatChan <- true
+		}
+		rf.mu.Unlock()
+		time.Sleep(time.Millisecond * 10)
+	}
+
+}
+
+// resetTimerHeartbeat 重置心跳包
+func (rf *Raft) resetTimerHeartbeat() {
+	rf.heartbeatTimeout = time.Now().UnixMilli() + rf.heartbeatTimeout
 }
 
 //
@@ -431,12 +470,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
+
 	rf.timeoutHeartbeat = 100 // 100ms
 	rf.electionChan = make(chan bool)
 	rf.heartbeatChan = make(chan bool)
 	rf.State = Follower
 	rf.currentTerm = 0
 	rf.votedFor = nil
+	rand.Seed(time.Now().UnixNano())
+	rf.ctx = context.WithValue(context.Background(), "logID", rand.Int())
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
