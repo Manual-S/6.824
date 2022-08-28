@@ -144,8 +144,9 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int // 当前任期
-	Success bool
+	Term       int // 当前任期
+	Success    bool
+	FollowerID int
 }
 
 //
@@ -169,34 +170,33 @@ type RequestVoteReply struct {
 	FollowerId  int  // 投票人的id
 }
 
-//
-// example RequestVote RPC handler.
-//
 // RequestVote 是follower收到candidate要求投票的rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 
-	if args.Term < rf.currentTerm {
-		// candidate的任期比当前节点的任期小 拒绝投票
+	if args.Term > rf.currentTerm {
+		rf.State = Follower
+		rf.currentTerm = args.Term
+	}
+
+	if args.Term < rf.currentTerm || rf.votedFor != nil {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		reply.FollowerId = rf.me
-		log.Printf("logID = %v,curID = %v curTerm = %v,argsID = %v,argsTerm = %v",
-			rf.ctx.Value("logID"), rf.me, rf.currentTerm, args.CandidateId, args.Term)
 		return
 	}
 
-	if rf.votedFor != nil {
+	if rf.votedFor == nil {
 		reply.Term = rf.currentTerm
 		reply.VoteGranted = true
-		return
-	}
+		reply.FollowerId = rf.me
 
-	reply.Term = rf.currentTerm
-	reply.VoteGranted = false
-	return
+		rf.votedFor = &args.CandidateId
+		rf.resetTimerElection()
+
+	}
 }
 
 // AppendEntries 接受到AppendEntries后
@@ -204,7 +204,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.LeaderTerm < rf.currentTerm {
 		// 领导人的任期比当前的任期小 返回假
 		reply.Success = false
-		reply.Term = rf.me
+		reply.Term = rf.currentTerm
+		reply.FollowerID = rf.me
 		return
 	}
 
@@ -217,7 +218,8 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 
 	reply.Success = true
-	reply.Term = rf.me
+	reply.Term = rf.currentTerm
+	reply.FollowerID = rf.me
 	return
 }
 
@@ -327,7 +329,7 @@ func (rf *Raft) sendHeartbeat() {
 		return
 	}
 
-	rf.resetTimerHeartbeat()
+	rf.resetTimerElection()
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
@@ -376,11 +378,9 @@ func (rf *Raft) startElection() {
 			args.Term = rf.currentTerm
 			args.CandidateId = rf.me
 			rf.mu.Unlock()
+
 			var reply RequestVoteReply
-			ok := rf.sendRequestVote(id, &args, &reply)
-			log.Printf("id = %v,logID = %v,ok = %v, reply = %v args = %v",
-				id, rf.ctx.Value("logID"), ok, reply, args)
-			return
+
 			if rf.sendRequestVote(id, &args, &reply) {
 
 				if rf.currentTerm < reply.Term {
@@ -417,7 +417,6 @@ func (rf *Raft) startElection() {
 // resetTimerElection 重置超时选举时间
 func (rf *Raft) resetTimerElection() {
 	rand.Seed(time.Now().UnixNano())
-	// todo 这里对时间的处理可能有问题
 	rf.electionDuration = rand.Int63n(150) + rf.timeoutHeartbeat*5
 	rf.electionTimeout = time.Now().UnixMilli() + rf.electionDuration
 }
