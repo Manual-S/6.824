@@ -19,7 +19,6 @@ package raft
 
 import (
 	"context"
-	"log"
 	"math/rand"
 	"sync"
 	"time"
@@ -72,18 +71,17 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	currentTerm int  // 服务器当前的任期
-	votedFor    *int // 当前任期内收到选票的候选人 如果没有投给任何候选人 则为空
-	//TimeOut     time.Time // 超时时间
-	State int // 当前节点的状态
+	currentTerm int // 服务器当前的任期
+	votedFor    int // 当前任期内收到选票的候选人 如果没有投给任何候选人 则为空
+	State       int // 当前节点的状态
 
 	electionChan  chan bool
 	heartbeatChan chan bool
 
-	electionTimeout  int64 // 发起选举超时时间
-	electionDuration int64
-	timeoutHeartbeat int64 // leader发送心跳包的时间
-	heartbeatTimeout int64 // 发送心跳包
+	electionTimeout   int64 // 发起选举超时时间
+	electionDuration  int64 // 超时选举的周期
+	heartbeatDuration int64 // leader发送心跳包的周期
+	heartbeatTimeout  int64 // 发送心跳包的超时时间
 
 	ctx context.Context
 }
@@ -91,11 +89,16 @@ type Raft struct {
 // return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 	var term int
-	var isleader bool
-	// Your code here (2A).
-	return term, isleader
+	var isLeader bool
+
+	term = rf.currentTerm
+	if rf.State == Leader {
+		isLeader = true
+	}
+	return term, isLeader
 }
 
 //
@@ -144,8 +147,8 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term       int // 当前任期
-	Success    bool
+	Term       int  // follower的当前任期
+	Success    bool // 如果跟随者所含有的条目和 prevLogIndex 以及 prevLogTerm 匹配上了，则为 true
 	FollowerID int
 }
 
@@ -165,42 +168,77 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	VoteGranted bool // 当候选人赢得了此章选票时为真
-	Term        int  // 当前任期号
+	VoteGranted bool // 当候选人赢得了此张选票时为真
+	Term        int  // 当前投票人的任期
 	FollowerId  int  // 投票人的id
 }
 
-// RequestVote 是follower收到candidate要求投票的rpc
+// coverState 改变状态
+//func (rf *Raft) coverState(state int64) {
+//	switch state {
+//	case Follower:
+//		rf.votedFor = nil
+//		rf.State = Follower
+//	case Candidate:
+//		rf.State = Candidate
+//		rf.currentTerm++
+//		rf.votedFor = &rf.me
+//		rf.resetTimerElection()
+//	case Leader:
+//		rf.State = Leader
+//		rf.resetTimerHeartbeat()
+//	}
+//}
+
+// RequestVote follower收到candidate要求投票的rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-
-	if args.Term > rf.currentTerm {
-		rf.State = Follower
-		rf.currentTerm = args.Term
-	}
-
-	if args.Term < rf.currentTerm || rf.votedFor != nil {
+	DPrintf("[RequestVote] %d receive Vote,term = %v can = %d\n can term = %v",
+		rf.me, rf.currentTerm, args.CandidateId, args.Term)
+	if args.Term < rf.currentTerm {
+		// 拒绝投票
 		reply.VoteGranted = false
-		reply.Term = rf.currentTerm
 		reply.FollowerId = rf.me
+		reply.Term = rf.currentTerm
 		return
 	}
 
-	if rf.votedFor == nil {
-		reply.Term = rf.currentTerm
-		reply.VoteGranted = true
+	if args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateId {
+		// 当前节点已经投过票 并且投的不是要求投票的候选人
+		// 拒绝投票
+		reply.VoteGranted = false
 		reply.FollowerId = rf.me
-
-		rf.votedFor = &args.CandidateId
-		rf.resetTimerElection()
-
+		reply.Term = rf.currentTerm
+		return
 	}
+
+	if args.Term > rf.currentTerm {
+		// 当前节点需要给候选人投票
+		rf.currentTerm = args.Term
+		rf.State = Follower
+	}
+
+	// 可以投票
+	rf.votedFor = args.CandidateId
+	reply.VoteGranted = true
+	reply.Term = rf.currentTerm
+	reply.FollowerId = rf.me
+
+	// 重置超时的选举时间
+	rf.resetTimerElection()
+
+	DPrintf("[RequestVote] %d receive RequestVote Finish", rf.me)
 }
 
 // AppendEntries 接受到AppendEntries后
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	DPrintf("[AppendEntries] %v %v %v %v", rf.me, rf.currentTerm, args.LeaderID, args.LeaderTerm)
+
 	if args.LeaderTerm < rf.currentTerm {
 		// 领导人的任期比当前的任期小 返回假
 		reply.Success = false
@@ -209,17 +247,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	if args.LeaderTerm > rf.currentTerm {
+		rf.currentTerm = args.LeaderTerm
+	}
+
+	rf.State = Follower
 	// 重置超时选举时间
 	rf.resetTimerElection()
-
-	if args.LeaderTerm > rf.currentTerm || rf.State != Follower {
-		rf.currentTerm = args.LeaderTerm
-		rf.State = Follower
-	}
 
 	reply.Success = true
 	reply.Term = rf.currentTerm
 	reply.FollowerID = rf.me
+
 	return
 }
 
@@ -322,48 +361,12 @@ func (rf *Raft) mainLoop() {
 
 // sendHeartbeat 发送心跳包
 func (rf *Raft) sendHeartbeat() {
-	rf.mu.Lock()
 
+	rf.mu.Lock()
 	if rf.State != Leader {
 		rf.mu.Unlock()
 		return
 	}
-
-	rf.resetTimerElection()
-
-	for i := 0; i < len(rf.peers); i++ {
-		if i == rf.me {
-			continue
-		}
-
-		go func(id int) {
-			args := AppendEntriesArgs{}
-			args.LeaderTerm = rf.currentTerm
-			args.LeaderID = rf.me
-
-			reply := AppendEntriesReply{}
-			if rf.sendAppendEntries(id, &args, &reply) {
-				// 广播的心跳包被follower接受到了
-				if reply.Success {
-					log.Printf("cur leader %v", rf.me)
-				} else {
-					// 领导人的任期小于接受者的任期
-					rf.State = Follower
-				}
-			} else {
-				log.Printf("")
-			}
-		}(i)
-	}
-}
-
-// startElection 开始选举流程
-func (rf *Raft) startElection() {
-	rf.mu.Lock()
-	rf.State = Candidate
-	rf.currentTerm = rf.currentTerm + 1
-
-	votes := 1 // 自己投自己一票
 	rf.mu.Unlock()
 
 	for i := 0; i < len(rf.peers); i++ {
@@ -373,63 +376,93 @@ func (rf *Raft) startElection() {
 
 		go func(id int) {
 			rf.mu.Lock()
-			// 发送广播
-			args := RequestVoteArgs{}
-			args.Term = rf.currentTerm
-			args.CandidateId = rf.me
+			args := AppendEntriesArgs{
+				LeaderTerm: rf.currentTerm,
+				LeaderID:   rf.me,
+			}
 			rf.mu.Unlock()
-
-			var reply RequestVoteReply
-
-			if rf.sendRequestVote(id, &args, &reply) {
-
-				if rf.currentTerm < reply.Term {
-					log.Printf("currentTerm is %v,votedTerm is %v,Failed vote", rf.currentTerm, reply.Term)
+			reply := AppendEntriesReply{}
+			if rf.sendAppendEntries(id, &args, &reply) {
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				if reply.Term > rf.currentTerm {
 					rf.State = Follower
 					rf.currentTerm = reply.Term
-					return
 				}
-
-				if reply.VoteGranted {
-					votes++
-
-					if votes > len(rf.peers)/2 && rf.State == Candidate {
-						log.Printf("%d is Leader", rf.me)
-						// 成为leader
-						rf.State = Leader
-						// 发送广播包 leader当选
-						rf.sendHeartbeat()
-					}
-				} else {
-					log.Printf("logID = %v,scurID %v,curTerm %v,votedId is %v votedTerm is %v,reject voted",
-						rf.ctx.Value("logID"), rf.me, rf.currentTerm, reply.FollowerId, reply.Term)
-				}
-			} else {
-				// 发送投票失败
-				log.Printf("rpc error %v", id)
 			}
-
 		}(i)
 	}
 
+	rf.resetTimerHeartbeat()
+}
+
+// startElection 开始选举流程
+func (rf *Raft) startElection() {
+	rf.mu.Lock()
+	rf.State = Candidate
+	rf.votedFor = rf.me
+	rf.currentTerm++
+	votes := 1
+	request := RequestVoteArgs{
+		Term:        rf.currentTerm,
+		CandidateId: rf.me,
+	}
+	rf.mu.Unlock()
+
+	for i := 0; i < len(rf.peers); i++ {
+		if i == rf.me {
+			continue
+		}
+
+		// 并行的发送选举rpc
+		go func(peer int) {
+			reply := RequestVoteReply{}
+			if rf.sendRequestVote(peer, &request, &reply) {
+				// 加锁
+				rf.mu.Lock()
+				defer rf.mu.Unlock()
+				// 解锁
+				if reply.Term > rf.currentTerm {
+					rf.State = Follower
+					rf.currentTerm = reply.Term
+					rf.votedFor = -1
+				} else if reply.Term == rf.currentTerm && rf.State == Candidate {
+					if reply.VoteGranted {
+						votes++
+						if votes > len(rf.peers)/2 {
+							DPrintf("[startElection] %v is leader term = %v", rf.me, rf.currentTerm)
+							// 已经获得全部选票的一半 当选leader
+							rf.State = Leader
+							// 发送心跳包
+							rf.heartbeatChan <- true
+						}
+					}
+				}
+			}
+		}(i)
+	}
+
+	rf.resetTimerElection()
 }
 
 // resetTimerElection 重置超时选举时间
 func (rf *Raft) resetTimerElection() {
 	rand.Seed(time.Now().UnixNano())
-	rf.electionDuration = rand.Int63n(150) + rf.timeoutHeartbeat*5
+	rf.electionDuration = rand.Int63n(150) + rf.heartbeatDuration*5
 	rf.electionTimeout = time.Now().UnixMilli() + rf.electionDuration
 }
 
 // 超时后向chan中发送消息 然后开始选举
 func (rf *Raft) timerElection() {
 	for {
-		timeNow := time.Now().UnixMilli()
-		if timeNow-rf.electionTimeout > 0 {
-			log.Printf("logID = %v,raft id = %d timeout, current term %v,current status %v",
-				rf.ctx.Value("logID"), rf.me, rf.currentTerm, StateMapping[rf.State])
-			rf.electionChan <- true
+		rf.mu.Lock()
+		if rf.State != Leader {
+			timeNow := time.Now().UnixMilli()
+			if timeNow-rf.electionTimeout > 0 {
+				rf.electionChan <- true
+			}
 		}
+		rf.mu.Unlock()
 		time.Sleep(time.Millisecond * 10)
 	}
 }
@@ -449,7 +482,7 @@ func (rf *Raft) timerHeartbeat() {
 
 // resetTimerHeartbeat 重置心跳包
 func (rf *Raft) resetTimerHeartbeat() {
-	rf.heartbeatTimeout = time.Now().UnixMilli() + rf.heartbeatTimeout
+	rf.heartbeatTimeout = time.Now().UnixMilli() + rf.heartbeatDuration
 }
 
 //
@@ -470,17 +503,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
-	rf.timeoutHeartbeat = 100 // 100ms
+	rf.heartbeatDuration = 100 // 100ms
 	rf.electionChan = make(chan bool)
 	rf.heartbeatChan = make(chan bool)
 	rf.State = Follower
 	rf.currentTerm = 0
-	rf.votedFor = nil
+	rf.votedFor = -1
 	rand.Seed(time.Now().UnixNano())
-	rf.ctx = context.WithValue(context.Background(), "logID", rand.Int())
+	rf.ctx = context.WithValue(context.Background(), "logID", rand.Intn(20))
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
+	//rf.electionTimeout = time.Now().UnixMilli() + 150
 	rf.resetTimerElection()
 	go rf.mainLoop()
 	go rf.timerElection()

@@ -57,6 +57,9 @@ func TestInitialElection2A(t *testing.T) {
 }
 
 func TestReElection2A(t *testing.T) {
+
+	log.SetFlags(log.Llongfile | log.Lmicroseconds)
+
 	servers := 3
 	cfg := make_config(t, servers, false)
 	defer cfg.cleanup()
