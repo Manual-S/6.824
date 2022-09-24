@@ -367,26 +367,24 @@ func (rf *Raft) sendHeartbeat() {
 		rf.mu.Unlock()
 		return
 	}
+	args := AppendEntriesArgs{
+		LeaderTerm: rf.currentTerm,
+		LeaderID:   rf.me,
+	}
 	rf.mu.Unlock()
 
 	for i := 0; i < len(rf.peers); i++ {
 		if i == rf.me {
 			continue
 		}
-
 		go func(id int) {
-			rf.mu.Lock()
-			args := AppendEntriesArgs{
-				LeaderTerm: rf.currentTerm,
-				LeaderID:   rf.me,
-			}
-			rf.mu.Unlock()
 			reply := AppendEntriesReply{}
 			if rf.sendAppendEntries(id, &args, &reply) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
 				if reply.Term > rf.currentTerm {
 					rf.State = Follower
+					rf.votedFor = -1
 					rf.currentTerm = reply.Term
 				}
 			}
@@ -514,7 +512,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
-	//rf.electionTimeout = time.Now().UnixMilli() + 150
+	rf.electionTimeout = time.Now().UnixMilli() + 150
 	rf.resetTimerElection()
 	go rf.mainLoop()
 	go rf.timerElection()
