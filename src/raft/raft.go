@@ -52,10 +52,9 @@ const (
 	Candidate = 3
 )
 
-var StateMapping = map[int]string{
-	Leader:    "leader",
-	Follower:  "follower",
-	Candidate: "candidate",
+type Entry struct {
+	Command interface{}
+	Term    int
 }
 
 //
@@ -84,6 +83,13 @@ type Raft struct {
 	heartbeatTimeout  int64 // 发送心跳包的超时时间
 
 	ctx context.Context
+
+	commitIndex int // 已知已提交的最高的日志条目的索引
+	log         []Entry
+	lastApplied int
+	nextIndex   []int // 对于每一台服务器 发送到该服务器的下一个日志条目的索引
+	matchIndex  []int // 对于每一台服务器 已知的已经复制到该服务器的最高日志条目的索引
+	applyChan   chan ApplyMsg
 }
 
 // return currentTerm and whether this server
@@ -144,6 +150,10 @@ type AppendEntriesArgs struct {
 	LeaderTerm int // leader的任期
 	LeaderID   int // leader的id
 
+	PrevLogIndex int // 紧邻新日志条目之前的那个日志条目的索引
+	PrevLogTerm  int // 紧邻新日志条目之前的那个日志条目的任期
+	Entries      []Entry
+	LeaderCommit int // 领导人的已知已提交的最高的日志条目的索引
 }
 
 type AppendEntriesReply struct {
@@ -158,8 +168,10 @@ type AppendEntriesReply struct {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	Term        int // 候选人的任期号
-	CandidateId int // 候选人的id
+	Term         int // 候选人的任期号
+	CandidateId  int // 候选人的id
+	LastLogIndex int // 候选人的最后日志条目的索引值
+	LastLogTerm  int // 候选人最后条目的任期号
 }
 
 //
@@ -173,22 +185,13 @@ type RequestVoteReply struct {
 	FollowerId  int  // 投票人的id
 }
 
-// coverState 改变状态
-//func (rf *Raft) coverState(state int64) {
-//	switch state {
-//	case Follower:
-//		rf.votedFor = nil
-//		rf.State = Follower
-//	case Candidate:
-//		rf.State = Candidate
-//		rf.currentTerm++
-//		rf.votedFor = &rf.me
-//		rf.resetTimerElection()
-//	case Leader:
-//		rf.State = Leader
-//		rf.resetTimerHeartbeat()
-//	}
-//}
+// Min 返回两者中的小值
+func Min(a int, b int) int {
+	if a > b {
+		return b
+	}
+	return a
+}
 
 // RequestVote follower收到candidate要求投票的rpc
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
@@ -247,6 +250,38 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		return
 	}
 
+	if len(rf.log) <= args.PrevLogIndex || rf.log[args.PrevLogIndex].Term != args.PrevLogTerm {
+		reply.Success = false
+		reply.Term = rf.currentTerm
+		reply.FollowerID = rf.me
+		return
+	}
+
+	isMatch := true
+	conflictIndex := 0
+	// 判断已经存在的条目和新条目是否发生了冲突
+	for i := 0; i < len(args.Entries) && i+args.PrevLogIndex+1 < len(rf.log); i++ {
+		if rf.log[i+args.PrevLogIndex+1].Term != args.Entries[i].Term {
+			// 说明不匹配
+			isMatch = false
+			conflictIndex = i
+			break
+		}
+	}
+
+	if !isMatch {
+		// 说明不匹配
+		// 删除这个已经存在的条目以及它之后的所有条目
+		rf.log = append(rf.log[:args.PrevLogIndex+1+conflictIndex], args.Entries[:conflictIndex]...)
+	}
+
+	// 追加日志
+
+	if args.LeaderCommit > rf.commitIndex {
+		// todo
+		rf.commitIndex = Min(args.LeaderCommit, 0)
+	}
+
 	if args.LeaderTerm > rf.currentTerm {
 		rf.currentTerm = args.LeaderTerm
 	}
@@ -260,6 +295,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.FollowerID = rf.me
 
 	return
+}
+
+// doApplyMsg 处理ApplyMsg
+func (rf *Raft) doApplyMsg() {
+
 }
 
 // 发送请求投票信息
@@ -315,13 +355,25 @@ func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *Ap
 // term. the third return value is true if this server believes it is
 // the leader.
 //
+// 第一个返回值
+// 第二个返回值 返回当前的任期
+// 第三个返回值 如果服务器认为自己是leader 则返回true
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	term := -1
 	isLeader := true
 
 	// Your code here (2B).
+	if term, isLeader = rf.GetState(); isLeader {
+		// 只有leader能处理追加日志需求
+		rf.mu.Lock()
+		rf.log = append(rf.log, Entry{
+			Command: command,
+			Term:    rf.currentTerm,
+		})
 
+		rf.mu.Unlock()
+	}
 	return index, term, isLeader
 }
 
@@ -501,6 +553,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.persister = persister
 	rf.me = me
 
+	rf.applyChan = applyCh
 	rf.heartbeatDuration = 100 // 100ms
 	rf.electionChan = make(chan bool)
 	rf.heartbeatChan = make(chan bool)
