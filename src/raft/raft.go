@@ -86,7 +86,7 @@ type Raft struct {
 
 	commitIndex int // 已知已提交的最高的日志条目的索引
 	log         []Entry
-	lastApplied int
+	lastApplied int   // 应用到状态机的最高日志索引
 	nextIndex   []int // 对于每一台服务器 发送到该服务器的下一个日志条目的索引
 	matchIndex  []int // 对于每一台服务器 已知的已经复制到该服务器的最高日志条目的索引
 	applyChan   chan ApplyMsg
@@ -170,8 +170,8 @@ type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
 	Term         int // 候选人的任期号
 	CandidateId  int // 候选人的id
-	LastLogIndex int // 候选人的最后日志条目的索引值
-	LastLogTerm  int // 候选人最后条目的任期号
+	LastLogIndex int // 候选人最后日志条目的索引值
+	LastLogTerm  int // 候选人最后日志条目的任期号
 }
 
 //
@@ -211,6 +211,16 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term == rf.currentTerm && rf.votedFor != -1 && rf.votedFor != args.CandidateId {
 		// 当前节点已经投过票 并且投的不是要求投票的候选人
 		// 拒绝投票
+		reply.VoteGranted = false
+		reply.FollowerId = rf.me
+		reply.Term = rf.currentTerm
+		return
+	}
+
+	// 比较候选人和当前节点日志那个更新
+	if rf.log[len(rf.log)-1].Term > args.LastLogTerm ||
+		(rf.log[len(rf.log)-1].Term == args.LastLogTerm && len(rf.log)-1 > args.LastLogIndex) {
+		// 候选人的日志并不比当前节点的日志新
 		reply.VoteGranted = false
 		reply.FollowerId = rf.me
 		reply.Term = rf.currentTerm
@@ -275,12 +285,11 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 		rf.log = append(rf.log[:args.PrevLogIndex+1+conflictIndex], args.Entries[:conflictIndex]...)
 	}
 
-	// 追加日志
-
 	if args.LeaderCommit > rf.commitIndex {
-		// todo
-		rf.commitIndex = Min(args.LeaderCommit, 0)
+		rf.commitIndex = Min(args.LeaderCommit, len(rf.log))
 	}
+
+	go rf.doApplyMsg()
 
 	if args.LeaderTerm > rf.currentTerm {
 		rf.currentTerm = args.LeaderTerm
@@ -299,7 +308,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 // doApplyMsg 处理ApplyMsg
 func (rf *Raft) doApplyMsg() {
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
 
+	for i := rf.lastApplied; i < rf.commitIndex; i++ {
+		applyMsg := ApplyMsg{
+			CommandValid: true,
+			Command:      rf.log[i],
+			CommandIndex: i,
+		}
+
+		rf.applyChan <- applyMsg
+		rf.lastApplied = rf.lastApplied + 1
+	}
 }
 
 // 发送请求投票信息
@@ -419,10 +440,6 @@ func (rf *Raft) sendHeartbeat() {
 		rf.mu.Unlock()
 		return
 	}
-	args := AppendEntriesArgs{
-		LeaderTerm: rf.currentTerm,
-		LeaderID:   rf.me,
-	}
 	rf.mu.Unlock()
 
 	for i := 0; i < len(rf.peers); i++ {
@@ -431,9 +448,27 @@ func (rf *Raft) sendHeartbeat() {
 		}
 		go func(id int) {
 			reply := AppendEntriesReply{}
+
+			rf.mu.Lock()
+			args := AppendEntriesArgs{
+				LeaderTerm:   rf.currentTerm,
+				LeaderID:     rf.me,
+				PrevLogIndex: rf.matchIndex[id] - 1,
+				PrevLogTerm:  rf.log[rf.matchIndex[id]-1].Term,
+				Entries:      rf.log[rf.matchIndex[id]:],
+				LeaderCommit: rf.commitIndex,
+			}
+			rf.mu.Unlock()
+
 			if rf.sendAppendEntries(id, &args, &reply) {
 				rf.mu.Lock()
 				defer rf.mu.Unlock()
+
+				if reply.Success {
+					// 说明正确收到了日志报
+					// 更新matchIndex
+				}
+
 				if reply.Term > rf.currentTerm {
 					rf.State = Follower
 					rf.votedFor = -1
@@ -485,6 +520,11 @@ func (rf *Raft) startElection() {
 							rf.State = Leader
 							// 发送心跳包
 							rf.heartbeatChan <- true
+							// 初始化nextIndex
+							for j := 0; j < len(rf.peers); j++ {
+								rf.nextIndex[j] = len(rf.log)
+								rf.matchIndex[j] = 0
+							}
 						}
 					}
 				}
